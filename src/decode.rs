@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{io::Cursor, result};
 use byteorder::{ReadBytesExt, LittleEndian};
 
 use crate::charmap;
@@ -138,11 +138,15 @@ pub fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &
         }
         // Special Command Character
         else if code == 0xFFFE {
-            // NYI: Handle special commands
+            let (command, to_skip) = decode_command(charmap, &decrypted_message[i..]);
+            result.push_str(&command);
+            i += to_skip;
         }
         // Trainer Name
         else if code == 0xF100 {
-            // NYI: Insert trainer name
+            let (trainer_name, to_skip) = decode_trainer_name(charmap, &decrypted_message[i..]);
+            result.push_str(&trainer_name);
+            i += to_skip;
         }
         // Regular character
         else if charmap.encode_map.contains_key(&code.to_string()) {
@@ -160,4 +164,23 @@ pub fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &
 
     result
     
+}
+
+pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String, usize) {
+    let mut result = String::new();
+    let mut to_skip = 1; // Skip the 0xFFFE code
+
+    // We need at least two more codes for command code and parameter count
+    if message_slice.len() < 2 {
+        return (result, to_skip);
+    }    
+
+    (result, to_skip)
+}
+
+pub fn decode_trainer_name(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String, usize) {
+    let mut result = String::new();
+    let mut to_skip = 1; // Skip the 0xF100 code
+
+    (result, to_skip)
 }
