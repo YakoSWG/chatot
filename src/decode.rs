@@ -1,4 +1,4 @@
-use std::{io::Cursor, result};
+use std::{io::Cursor};
 use byteorder::{ReadBytesExt, LittleEndian};
 
 use crate::charmap;
@@ -170,10 +170,54 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xFFFE code
 
-    // We need at least two more codes for command code and parameter count
-    if message_slice.len() < 2 {
+    // Stray command code
+    if message_slice.len() < 1 {
+            result.push_str("\\xFFFE");
         return (result, to_skip);
-    }    
+    }
+
+    // Get command code
+    let mut command_code = message_slice[1];
+    to_skip += 1;
+
+    // No param count (invalid)
+    if message_slice.len() < 2 {
+        result.push_str(&format!("\\xFFFE\\x{:04X}", command_code));
+        return (result, to_skip);
+    }
+
+    // Get number of parameters
+    let param_count = message_slice[2];
+    to_skip += 1 + param_count as usize;
+
+    // Not enough data for parameters
+    if message_slice.len() < (3 + param_count as usize) {
+        result.push_str(&format!("\\xFFFE\\x{:04X}\\x{:04X}", command_code, param_count));
+        return (result, to_skip);
+    }
+
+    // Decode parameters
+    let mut params = message_slice[3..(3 + param_count as usize)].to_vec();
+
+    let mut special_byte: u16 = 0;
+
+    if !charmap.command_map.contains_key(&command_code) && charmap.command_map.contains_key(&(command_code & 0xFF00)) {
+        special_byte = command_code & 0x00FF;
+        command_code = command_code & 0xFF00;     
+    }
+
+    let command_str = if let Some(cmd) = charmap.command_map.get(&command_code) {
+        cmd.clone()
+    } else {
+        format!("0x{:04X}", command_code)
+    };
+
+    params.insert(0, special_byte);
+
+    let param_str: String = params.iter().map(|p| format!("{p}, ")).collect();
+    let param_str: &str = param_str.trim_end_matches(", ");
+
+    result.push_str(&format!("{{{}, {}}}", command_str, param_str));
 
     (result, to_skip)
 }
@@ -181,6 +225,43 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
 pub fn decode_trainer_name(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String, usize) {
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xF100 code
+
+    let mut bit = 0;
+    let mut index = 1;
+    let mut codes_consumed = 1;
+
+    result.push_str("{TRAINER_NAME:");
+
+    while index < message_slice.len() {
+
+        let mut code = (message_slice[index] >> bit) & 0x1FF;
+        bit += 9;
+
+        if bit >= 15 {
+            bit -= 15;
+            index += 1;
+            codes_consumed += 1;
+
+            if bit != 0 && index < message_slice.len() {
+                code |= message_slice[index] << (9 - bit) & 0x1FF;
+            }
+        }
+
+        // Termination character
+        if code == 0x1FF {
+            break;
+        }
+
+        if charmap.decode_map.contains_key(&code) {
+            let character = charmap.decode_map.get(&code).unwrap();
+            result.push_str(character);
+        } else {
+            result.push_str(&format!("0x{:04X}", code));
+        }
+    }
+
+    result.push_str("}");
+    to_skip += codes_consumed;
 
     (result, to_skip)
 }
