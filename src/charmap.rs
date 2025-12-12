@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde_derive::Deserialize;
-use serde_xml_rs::from_str;
+use quick_xml::{Reader, de::{Deserializer, from_str}};
 
 
 #[derive(Debug, Deserialize)]
@@ -24,8 +24,10 @@ pub struct Header {
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     /// The hex code for the character/command (e.g., "0000", "FF00")
+    #[serde(rename = "@code", )]
     pub code: String,
     /// The type of entry (e.g., "char", "command", "alias")
+    #[serde(rename = "@kind", )]
     pub kind: String,
     /// The inner text content of the entry
     #[serde(rename = "$value", )]
@@ -33,7 +35,7 @@ pub struct Entry {
 }
 
 pub struct Charmap {
-    pub encode_map: HashMap<String, u16>,
+    pub _encode_map: HashMap<String, u16>,
     pub decode_map: HashMap<u16, String>,
     pub command_map: HashMap<u16, String>,
 }
@@ -41,7 +43,12 @@ pub struct Charmap {
 pub fn read_charmap(path: &std::path::PathBuf) -> Result<Charmap, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
 
-    let charmap: CharmapXML = from_str(&content)?;
+    let mut reader = Reader::from_str(&content);
+    reader.config_mut().trim_text(false);
+    
+    let mut deserializer = Deserializer::from_reader(reader.into_inner());
+    let charmap: CharmapXML = serde::Deserialize::deserialize(&mut deserializer)?;
+
     let mut encode_map = HashMap::new();
     let mut decode_map = HashMap::new();
     let mut command_map = HashMap::new();
@@ -72,7 +79,7 @@ pub fn read_charmap(path: &std::path::PathBuf) -> Result<Charmap, Box<dyn std::e
     }    
 
     Ok(Charmap {
-        encode_map,
+        _encode_map: encode_map,
         decode_map,
         command_map,
     })
