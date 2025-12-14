@@ -27,8 +27,8 @@ pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error
     let content = std::fs::read_to_string(path)?;
     let raw: RawCharmap = serde_json::from_str(&content)?;
 
-    let mut decode_map = HashMap::new();
-    let mut encode_map = HashMap::new();
+    let mut decode_map = HashMap::with_capacity(raw.char_map.len());
+    let mut encode_map = HashMap::with_capacity(raw.char_map.len());
     let mut alias_map = HashMap::new();
 
     // First pass: build decode and encode maps
@@ -74,7 +74,7 @@ pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error
     }
 
 
-    let mut command_map = HashMap::new();
+    let mut command_map = HashMap::with_capacity(raw.command_map.len());
     for (code_str, name) in raw.command_map {
         let code = u16::from_str_radix(&code_str, 16)
             .map_err(|e| format!("Invalid command_map key {code_str}: {e}"))?;
