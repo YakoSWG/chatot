@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::mem::size_of;
 use byteorder::{WriteBytesExt, LittleEndian};
+use rayon::prelude::*;
 
 use crate::charmap;
 
@@ -47,11 +48,27 @@ pub fn encode_texts(
         return Err("No archive destination specified".into());
     };
 
-    // Open and encode each text file
-    for (text_path, archive_path) in text_files.iter().zip(archive_files.iter()) {
-        let text_content = std::fs::read_to_string(text_path)?;
-        let encoded_data = encode_text(&charmap, &text_content)?;
-        std::fs::write(archive_path, encoded_data)?;
+    // Open and encode each text file in parallel
+    let results: Vec<Result<(), String>> = text_files
+        .par_iter()
+        .zip(archive_files.par_iter())
+        .map(|(text_path, archive_path)| {
+            #[cfg(debug_assertions)]
+            println!("Encoding text: {:?} -> {:?}", text_path, archive_path);
+
+            let text_content = std::fs::read_to_string(text_path)
+                .map_err(|e| format!("Failed to read text {:?}: {}", text_path, e))?;
+            let encoded_data = encode_text(&charmap, &text_content)
+                .map_err(|e| format!("Failed to encode text {:?}: {}", text_path, e))?;
+            std::fs::write(archive_path, encoded_data)
+                .map_err(|e| format!("Failed to write archive {:?}: {}", archive_path, e))?;
+            Ok(())
+        })
+        .collect();
+
+    // Check for errors
+    for result in results {
+        result.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     }
 
     Ok(())
@@ -76,8 +93,7 @@ pub fn encode_text(
 
         // First line is key (// Key: XXXX)
         if let Some(key_str) = line.strip_prefix("// Key: ") {
-            key = u16::from_str_radix(key_str.trim(), 16)
-                .map_err(|e| format!("Invalid key format: {e}"))?;
+            key = parse_hex_or_decimal(key_str.trim()) as u16;
             continue; // skip key line
         }
 

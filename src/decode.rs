@@ -1,5 +1,6 @@
 use std::{io::Cursor};
 use byteorder::{ReadBytesExt, LittleEndian};
+use rayon::prelude::*;
 
 use crate::charmap;
 
@@ -46,13 +47,29 @@ pub fn decode_archives(
         return Err("No text destination specified".into());
     };
 
-    // Open and decode each archive
-    for (archive_path, text_path) in archive_files.iter().zip(text_files.iter()) {
-        let archive_file = std::fs::read(archive_path)?;
-        let lines = decode_archive(&charmap, &archive_file)?;
-        let mut content = lines.join("\n");
-        content.push('\n'); // Add trailing newline
-        std::fs::write(text_path, content)?;
+    // Open and decode each archive in parallel
+    let results: Vec<Result<(), String>> = archive_files
+        .par_iter()
+        .zip(text_files.par_iter())
+        .map(|(archive_path, text_path)| {
+            #[cfg(debug_assertions)]
+            println!("Decoding archive: {:?} -> {:?}", archive_path, text_path);
+
+            let archive_file = std::fs::read(archive_path)
+                .map_err(|e| format!("Failed to read archive {:?}: {}", archive_path, e))?;
+            let lines = decode_archive(&charmap, &archive_file)
+                .map_err(|e| format!("Failed to decode archive {:?}: {}", archive_path, e))?;
+            let mut content = lines.join("\n");
+            content.push('\n'); // Add trailing newline
+            std::fs::write(text_path, content)
+                .map_err(|e| format!("Failed to write text {:?}: {}", text_path, e))?;
+            Ok(())
+        })
+        .collect();
+
+    // Check for errors
+    for result in results {
+        result.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     }
 
     Ok(())
@@ -70,8 +87,11 @@ pub fn decode_archive(charmap: &charmap::Charmap, archive_file: &Vec<u8>) -> Res
     // Read u16 key (2 bytes)
     let key = archive.read_u16::<LittleEndian>()?;
 
+    #[cfg(debug_assertions)]
+    println!("Decoding archive with {} messages, key=0x{:04X}", message_count, key);
+
     // Add key as first line for re-encoding
-    lines.push(format!("// Key: {:04X}", key));
+    lines.push(format!("// Key: 0x{:04X}", key));
 
     // Read message table entries
     let mut message_table = Vec::new();
@@ -168,6 +188,10 @@ pub fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &
 
     }
 
+    if (i + 1) < decrypted_message.len() {
+        eprintln!("Warning: extra data found after termination character in message. Ignoring remaining {} character codes.", decrypted_message.len() - (i + 1));
+    }
+
     result
     
 }
@@ -178,7 +202,8 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
 
     // Stray command code
     if message_slice.len() < 1 {
-            result.push_str("\\xFFFE");
+        eprintln!("Warning: stray command code 0xFFFE encountered with no following data");
+        result.push_str("\\xFFFE");
         return (result, to_skip);
     }
 
@@ -188,6 +213,7 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
 
     // No param count (invalid)
     if message_slice.len() < 2 {
+        eprintln!("Warning: command code 0x{:04X} encountered with no parameter count", command_code);
         result.push_str(&format!("\\xFFFE\\x{:04X}", command_code));
         return (result, to_skip);
     }
@@ -198,6 +224,7 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
 
     // Not enough data for parameters
     if message_slice.len() < (3 + param_count as usize) {
+        eprintln!("Warning: command code 0x{:04X} encountered with insufficient parameters (expected {}, found {})", command_code, param_count, message_slice.len() - 3);
         result.push_str(&format!("\\xFFFE\\x{:04X}\\x{:04X}", command_code, param_count));
         return (result, to_skip);
     }
@@ -215,6 +242,7 @@ pub fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (Str
     let command_str = if let Some(cmd) = charmap.command_map.get(&command_code) {
         cmd.clone()
     } else {
+        eprintln!("Warning: unknown command code 0x{:04X} encountered during decoding", command_code);
         format!("0x{:04X}", command_code)
     };
 
