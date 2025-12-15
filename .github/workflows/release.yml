@@ -20,14 +20,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: chatot.exe
             asset_name: chatot-windows-x86_64.exe
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: chatot
-            asset_name: chatot-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: chatot
-            asset_name: chatot-macos-arm64
 
     steps:
       - name: Checkout code
