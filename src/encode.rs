@@ -111,7 +111,7 @@ pub fn encode_texts(
                 encode_json(&charmap, &text_content, &settings.lang)
                     .map_err(|e| format!("Failed to encode JSON {:?}: {}", text_path, e))?
             } else {
-                encode_text(&charmap, &text_content)
+                encode_text(&charmap, &text_content, settings.msgenc_format)
                     .map_err(|e| format!("Failed to encode text {:?}: {}", text_path, e))?
             };
             std::fs::write(archive_path, encoded_data)
@@ -131,6 +131,7 @@ pub fn encode_texts(
 fn encode_text(
     charmap: &charmap::Charmap,
     text: &str,
+    msgenc_format: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut key = 0u16;
     let mut messages: Vec<String> = Vec::new();
@@ -151,7 +152,7 @@ fn encode_text(
         messages.push(line.to_string());
     }
 
-    encode_messages(charmap, key, &messages)
+    encode_messages(charmap, key, &messages, msgenc_format)
 }
 
 fn encode_json(
@@ -180,13 +181,14 @@ fn encode_json(
         messages.push(message_str);
     }
 
-    encode_messages(charmap, parsed.key, &messages)
+    encode_messages(charmap, parsed.key, &messages, false)
 }
 
 fn encode_messages(
     charmap: &charmap::Charmap,
     key: u16,
     messages: &[String],
+    msgenc_format: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
     let mut message_index = 0usize;
@@ -201,7 +203,7 @@ fn encode_messages(
         // Start from message index 1
         message_index += 1;
 
-        let message_codes = encode_string_to_message(charmap, message);
+        let message_codes = encode_string_to_message(charmap, message, msgenc_format);
         let mut encrypted_codes = encrypt_message(&message_codes, message_index as u16);
 
         let len = encrypted_codes.len() as u32; // length in u16 units
@@ -279,6 +281,7 @@ fn encrypt_message(decrypted_message: &Vec<u16>, index: u16) -> Vec<u16> {
 fn encode_string_to_message(
     charmap: &charmap::Charmap,
     text: &str,
+    msgenc_format: bool,
 ) -> Vec<u16>{
     let mut message_codes = Vec::new();
 
@@ -398,11 +401,24 @@ fn encode_string_to_message(
                 message_codes.push(0);
                 continue;
             }
-
+            // Special handling for TRAINER_NAME command
             if command_str.starts_with("TRAINER_NAME:") {
                 let name_str = &command_str["TRAINER_NAME:".len()..];
                 let name_codes = encode_trainer_name(charmap, name_str);
                 message_codes.extend(name_codes);
+                continue;
+            }
+            // Handling for TRNAME command (used by msgenc)
+            else if msgenc_format && command_str.starts_with("TRNAME") {
+                // Treat the rest of the message as trainer name
+                let name_str: String = chars.collect();
+                let name_codes = encode_trainer_name(charmap, &name_str);
+                message_codes.extend(name_codes);
+                break; // end of message
+            }
+            else if msgenc_format {
+                let command_codes = encode_command_msgenc(charmap, &command_str);
+                message_codes.extend(command_codes);
                 continue;
             }
             else {
@@ -428,7 +444,7 @@ fn encode_string_to_message(
 
 fn encode_command(
     charmap: &charmap::Charmap,
-    command_str: &str,
+    command_str: &str
 ) -> Vec<u16> {
     let mut command_codes = Vec::new();
 
@@ -458,11 +474,7 @@ fn encode_command(
     let special_byte_str = parts[1];
 
     // Allow special byte to be in hex (0xXX) or decimal
-    let special_byte = if special_byte_str.starts_with("0x") {
-        u16::from_str_radix(&special_byte_str[2..], 16).unwrap_or(0)
-    } else {
-        special_byte_str.parse::<u16>().unwrap_or(0)
-    };
+    let special_byte = parse_hex_or_decimal(special_byte_str) as u16;
 
     // Push command marker
     command_codes.push(0xFFFE);
@@ -475,6 +487,60 @@ fn encode_command(
     command_codes.push(param_len as u16);
 
     for param_str in parts.iter().skip(2) {
+        let param = parse_hex_or_decimal(param_str) as u16;
+        command_codes.push(param);
+    }
+    command_codes
+}
+
+fn encode_command_msgenc(
+    charmap: &charmap::Charmap,
+    command_str: &str
+) -> Vec<u16> {
+    let mut command_codes = Vec::new();
+
+    // Opinion: I don't understand why msgenc uses this different format for commands.
+    // You could just put a comma between the command name and parameters instead of using whitespace here and ONLY here.
+    // Split into two parts by finding first whitespace
+    let mut parts_iter = command_str.split_whitespace();
+    let command_name = parts_iter.next().unwrap();
+
+    // Split the rest by commas
+    let parts: Vec<&str> = std::iter::once(command_name)
+        .chain(parts_iter.flat_map(|s| s.split(',').map(|s| s.trim())))
+        .collect();
+
+    let mut command_code = match charmap.command_map.iter().find(|(_, name)| *name == command_name) {
+        Some((code, _)) => *code,
+        None => {
+            let code = parse_hex_or_decimal(command_name) as u16;
+            eprintln!("Warning: unknown command name '{}'. Using code 0x{:04X}.", command_name, code);
+            code
+        }
+    };
+
+    // Set up iterator for parameters and get parameter count
+    let mut param_iter = parts.iter();
+    let mut param_len = parts.len() - 1;
+
+    // Assume this is the special byte for now
+    let special_byte_str = parts[0];
+    let special_byte = parse_hex_or_decimal(special_byte_str);
+
+    if command_name.starts_with("STRVAR_") {
+        command_code |= special_byte as u16;
+        param_iter.next(); // consume special byte
+        param_len -= 1;
+    }
+
+    // Push command marker
+    command_codes.push(0xFFFE);
+    command_codes.push(command_code);
+
+    // Remaining parts are parameters
+    command_codes.push(param_len as u16);
+
+    for param_str in param_iter {
         let param = parse_hex_or_decimal(param_str) as u16;
         command_codes.push(param);
     }

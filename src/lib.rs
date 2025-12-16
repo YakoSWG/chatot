@@ -22,5 +22,6 @@ pub struct Settings {
     pub json: bool,
     pub lang: String,
     pub newer_only: bool,
+    pub msgenc_format: bool,
 }
 

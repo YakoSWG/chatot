@@ -110,14 +110,14 @@ pub fn decode_archives(
 
             let archive_file = std::fs::read(archive_path)
                 .map_err(|e| format!("Failed to read archive {:?}: {}", archive_path, e))?;
-            let archive = decode_archive(&charmap, &archive_file)
+            let archive = decode_archive(&charmap, &archive_file, settings.msgenc_format)
                 .map_err(|e| format!("Failed to decode archive {:?}: {}", archive_path, e))?;
 
             if settings.json {
                 write_decoded_json(&archive, text_path, settings.lang.clone())
                     .map_err(|e| format!("Failed to write decoded JSON to {:?}: {}", text_path, e))?;
             } else {
-                write_decoded_text(&archive, text_path)
+                write_decoded_text(&archive, text_path, settings.msgenc_format)
                     .map_err(|e| format!("Failed to write decoded text to {:?}: {}", text_path, e))?;
             }
 
@@ -137,11 +137,16 @@ pub fn decode_archives(
 fn write_decoded_text(
     archive: &TextArchive,
     text_path: &std::path::PathBuf,
+    msgenc_format: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     
     let mut content = archive.messages.join("\n");
-    // Prepend key as comment
-    content = format!("// Key: 0x{:04X}\n{}", archive.key, content);
+    
+    if !msgenc_format {
+        // Prepend key as comment
+        content = format!("// Key: 0x{:04X}\n{}", archive.key, content);
+    }
+
     content.push('\n'); // Add trailing newline
     std::fs::write(text_path, content)?;
     
@@ -232,7 +237,11 @@ fn write_decoded_json(
     Ok(())
 }
 
-fn decode_archive(charmap: &charmap::Charmap, archive_file: &Vec<u8>) -> Result<TextArchive, Box<dyn std::error::Error>> {
+fn decode_archive(
+    charmap: &charmap::Charmap, 
+    archive_file: &Vec<u8>,
+    msgenc_format: bool,
+) -> Result<TextArchive, Box<dyn std::error::Error>> {
     
     let mut archive = Cursor::new(archive_file  );
 
@@ -280,7 +289,7 @@ fn decode_archive(charmap: &charmap::Charmap, archive_file: &Vec<u8>) -> Result<
             .for_each(|c| *c = archive.read_u16::<LittleEndian>().unwrap());
         let decrypted_message = decrypt_message(&encrypted_message, (i + 1) as u16);
 
-        let message_string = decode_message_to_string(&charmap, &decrypted_message);
+        let message_string = decode_message_to_string(&charmap, &decrypted_message, msgenc_format);
         messages.push(message_string);
     }
 
@@ -302,7 +311,11 @@ fn decrypt_message(encrypted_message: &Vec<u16>, index: u16) -> Vec<u16> {
     decrypted_message
 }
 
-fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &Vec<u16>) -> String {
+fn decode_message_to_string(
+    charmap: &charmap::Charmap, 
+    decrypted_message: &Vec<u16>, 
+    msgenc_format: bool,
+) -> String {
 
     let mut i = 0;
     let mut result = String::new();
@@ -317,13 +330,13 @@ fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &Vec<
         }
         // Special Command Character
         else if code == 0xFFFE {
-            let (command, to_skip) = decode_command(charmap, &decrypted_message[i..]);
+            let (command, to_skip) = decode_command(charmap, &decrypted_message[i..], msgenc_format);
             result.push_str(&command);
             i += to_skip;
         }
         // Trainer Name
         else if code == 0xF100 {
-            let (trainer_name, to_skip) = decode_trainer_name(charmap, &decrypted_message[i..]);
+            let (trainer_name, to_skip) = decode_trainer_name(charmap, &decrypted_message[i..], msgenc_format);
             result.push_str(&trainer_name);
             i += to_skip;
         }
@@ -336,7 +349,7 @@ fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &Vec<
         // Unknown character code
         else {
             eprintln!("Warning: unknown character code 0x{:04X} encountered during decoding", code);
-            result.push_str(&format!("0x{:04X}", code));
+            result.push_str(&format!("\\x{:04X}", code));
             i += 1;
         }
 
@@ -350,7 +363,11 @@ fn decode_message_to_string(charmap: &charmap::Charmap, decrypted_message: &Vec<
     
 }
 
-fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String, usize) {
+fn decode_command(
+    charmap: &charmap::Charmap, 
+    message_slice: &[u16], 
+    msgenc_format: bool
+) -> (String, usize) {
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xFFFE code
 
@@ -400,17 +417,48 @@ fn decode_command(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String,
         format!("0x{:04X}", command_code)
     };
 
-    params.insert(0, special_byte);
+    // Regular format
+    if !msgenc_format {
+        // We always insert the special byte as the first parameter
+        params.insert(0, special_byte);
 
-    let param_str: String = params.iter().map(|p| format!("{p}, ")).collect();
-    let param_str: &str = param_str.trim_end_matches(", ");
+        let param_str: String = params.iter().map(|p| format!("{p}, ")).collect();
+        let param_str: &str = param_str.trim_end_matches(", ");
 
-    result.push_str(&format!("{{{}, {}}}", command_str, param_str));
+        result.push_str(&format!("{{{}, {}}}", command_str, param_str));
 
-    (result, to_skip)
+        (result, to_skip)
+    } 
+    // Msgenc format
+    else {
+        // msgenc format omits the special byte if it is zero
+        if special_byte != 0 {
+            params.insert(0, special_byte);
+        }
+
+        // First parameter and command name are also only seperated by a space
+        // Opinion: having whitespace delimiters AND comma delimiters is just weird and janky
+        let mut param_str = String::new();
+        if !params.is_empty() {
+            param_str.push_str(&format!("{}", params[0]));
+            for p in &params[1..] {
+                param_str.push_str(&format!(", {}", p));
+            }
+        }
+
+        result.push_str(&format!("{{{} {}}}", command_str, param_str));
+
+        (result, to_skip)
+    }
+
 }
+    
 
-fn decode_trainer_name(charmap: &charmap::Charmap, message_slice: &[u16]) -> (String, usize) {
+fn decode_trainer_name(
+    charmap: &charmap::Charmap,
+    message_slice: &[u16], 
+    msgenc_format: bool
+) -> (String, usize) {
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xF100 code
 
@@ -418,7 +466,15 @@ fn decode_trainer_name(charmap: &charmap::Charmap, message_slice: &[u16]) -> (St
     let mut index = 1;
     let mut codes_consumed = 1;
 
-    result.push_str("{TRAINER_NAME:");
+    if !msgenc_format {
+        result.push_str("{TRAINER_NAME:");
+    }
+    else {
+        // msgenc treats the entire rest of the message as trainer name until termination where it just stops
+        // this can in theory lead to issues if there are extra codes after the trainer name
+        // this doesn't happen in the vanilla games but it's something to be aware of
+        result.push_str("{TRNAME}");
+    }
 
     while index < message_slice.len() {
 
@@ -448,7 +504,11 @@ fn decode_trainer_name(charmap: &charmap::Charmap, message_slice: &[u16]) -> (St
         }
     }
 
-    result.push_str("}");
+    // Close trainer name tag for non-msgenc format
+    if !msgenc_format {
+        result.push_str("}");
+    }
+
     to_skip += codes_consumed;
 
     (result, to_skip)

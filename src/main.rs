@@ -74,6 +74,9 @@ pub struct Settings {
     /// Process only files newer than existing outputs
     #[arg(short='n', long="newer", default_value_t = false)]
     pub newer_only: bool,
+    /// Use same format as tool "msgenc" for encoding messages
+    #[arg(short='f', long="msgenc-format", default_value_t = false, conflicts_with = "json")]
+    pub msgenc_format: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
