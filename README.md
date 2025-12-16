@@ -79,10 +79,10 @@ chatot encode -m <CHARMAP> [INPUT] [OUTPUT] [OPTIONS]
 
 ```bash
 # Encode a single text file to an archive
-chatot encode -m charmap.json -t input.txt -b output.narc
+chatot encode -m charmap.json -t input.txt -b output.bin
 
 # Encode multiple text files
-chatot encode -m charmap.json -t text1.txt text2.txt -b archive1.narc archive2.narc
+chatot encode -m charmap.json -t text1.txt text2.txt -b archive1.bin archive2.bin
 
 # Encode all text files from a directory to an output directory
 chatot encode -m charmap.json -d input_dir/ -a output_dir/
