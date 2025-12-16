@@ -38,6 +38,16 @@ enum Commands {
         #[command(flatten)]
         settings: Settings,
     },
+    ///
+    Format {
+        /// Path to custom character map file
+        #[arg(short='m', long)]
+        charmap: PathBuf,
+        #[command(flatten)]
+        source: TextSource,
+        #[command(flatten)]
+        settings: Settings,
+    }
 }
 
 #[derive(Args, Clone)]
@@ -75,7 +85,7 @@ pub struct Settings {
     #[arg(short='n', long="newer", default_value_t = false)]
     pub newer_only: bool,
     /// Use same format as tool "msgenc" for encoding messages
-    #[arg(short='f', long="msgenc-format", default_value_t = false, conflicts_with = "json")]
+    #[arg(long="msgenc", default_value_t = false, conflicts_with = "json")]
     pub msgenc_format: bool,
 }
 
@@ -110,6 +120,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let charmap = charmap::read_charmap(charmap)?;
 
             encode::encode_texts(&charmap, source, destination, settings)
+        }
+        Commands::Format { charmap, source : _source, settings: _settings } => {
+            let _charmap = charmap::read_charmap(charmap)?;
+
+            Ok(())
         }
     }
 }

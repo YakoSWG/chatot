@@ -581,7 +581,7 @@ fn encode_trainer_name(
     // If there are remaining bits, push the last u16
     if bit > 0 {
         // Shift the 9-bit termination code (0x1FF) into the remaining bits and emit the final u16
-        current_u16 |= 0x1FF << bit;
+        current_u16 |= 0xFFFF << bit;
         name_codes.push(current_u16 & 0x7FFF);
     }
 
