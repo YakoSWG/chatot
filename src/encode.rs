@@ -66,7 +66,7 @@ pub fn encode_texts(
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("output");
-                dir.join(format!("{}.arc", file_stem))
+                dir.join(format!("{}.bin", file_stem))
             })
             .collect()
     } else {
