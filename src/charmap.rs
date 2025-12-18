@@ -65,7 +65,7 @@ pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error
         }
 
         // Multi character aliases must be wrapped in square brackets
-        if alias.len() > 1 && !(alias.starts_with('[') && alias.ends_with(']')) {
+        if alias.chars().count() > 1 && !(alias.starts_with('[') && alias.ends_with(']')) {
             eprintln!("Warning: multi-character alias '{alias}' for code {code:04X} must be wrapped in square brackets, ignored");
             continue;
         }

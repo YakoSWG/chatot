@@ -505,9 +505,10 @@ fn encode_command_msgenc(
     let mut parts_iter = command_str.split_whitespace();
     let command_name = parts_iter.next().unwrap();
 
-    // Split the rest by commas
-    let parts: Vec<&str> = std::iter::once(command_name)
-        .chain(parts_iter.flat_map(|s| s.split(',').map(|s| s.trim())))
+    // Split the rest by commas and remove any empty parts
+    let parts: Vec<&str> = parts_iter
+        .flat_map(|s| s.split(',').map(|s| s.trim()))
+        .filter(|s| !s.is_empty())
         .collect();
 
     let mut command_code = match charmap.command_map.iter().find(|(_, name)| *name == command_name) {
@@ -521,16 +522,18 @@ fn encode_command_msgenc(
 
     // Set up iterator for parameters and get parameter count
     let mut param_iter = parts.iter();
-    let mut param_len = parts.len() - 1;
+    let mut param_len = parts.len();
 
     // Assume this is the special byte for now
-    let special_byte_str = parts[0];
-    let special_byte = parse_hex_or_decimal(special_byte_str);
+    if param_len > 0 {
+        let special_byte_str = parts[0];
+        let special_byte = parse_hex_or_decimal(special_byte_str);
 
-    if command_name.starts_with("STRVAR_") {
-        command_code |= special_byte as u16;
-        param_iter.next(); // consume special byte
-        param_len -= 1;
+        if command_name.starts_with("STRVAR_") {
+            command_code |= special_byte as u16;
+            param_iter.next(); // consume special byte
+            param_len -= 1;
+        }
     }
 
     // Push command marker
@@ -540,10 +543,14 @@ fn encode_command_msgenc(
     // Remaining parts are parameters
     command_codes.push(param_len as u16);
 
+    let mut debug_params = Vec::new();
+
     for param_str in param_iter {
         let param = parse_hex_or_decimal(param_str) as u16;
         command_codes.push(param);
+        debug_params.push(format!("0x{:04X}", param));
     }
+
     command_codes
 }
 
