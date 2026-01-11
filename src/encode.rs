@@ -66,7 +66,7 @@ pub fn encode_texts(
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("output");
-                dir.join(format!("{}.bin", file_stem))
+                dir.join(format!("{}", file_stem))
             })
             .collect()
     } else {
@@ -116,6 +116,19 @@ pub fn encode_texts(
             };
             std::fs::write(archive_path, encoded_data)
                 .map_err(|e| format!("Failed to write archive {:?}: {}", archive_path, e))?;
+
+            if settings.newer_only {
+                // Update timestamp on source text file to match destination archive
+                let archive_metadata = std::fs::metadata(archive_path)
+                    .map_err(|e| format!("Failed to get metadata for archive {:?}: {}", archive_path, e))?;
+                let modified_time = archive_metadata.modified()
+                    .map_err(|e| format!("Failed to get modified time for archive {:?}: {}", archive_path, e))?;
+                let text_file = std::fs::File::open(text_path)
+                    .map_err(|e| format!("Failed to open text file {:?}: {}", text_path, e))?;
+                text_file.set_modified(modified_time)
+                    .map_err(|e| format!("Failed to update modified time for text file {:?}: {}", text_path, e))?;
+            }
+
             Ok(())
         })
         .collect();

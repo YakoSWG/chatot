@@ -121,6 +121,17 @@ pub fn decode_archives(
                     .map_err(|e| format!("Failed to write decoded text to {:?}: {}", text_path, e))?;
             }
 
+            if settings.newer_only {
+                // Update source archive file timestamp to match destination text file
+                let text_metadata = std::fs::metadata(text_path)
+                    .map_err(|e| format!("Failed to get metadata for text file {:?}: {}", text_path, e))?;
+                let modified_time = text_metadata.modified()
+                    .map_err(|e| format!("Failed to get modified time for text file {:?}: {}", text_path, e))?;
+                let archive_file = std::fs::File::open(archive_path)
+                    .map_err(|e| format!("Failed to open archive file {:?}: {}", archive_path, e))?;
+                archive_file.set_modified(modified_time)
+                    .map_err(|e| format!("Failed to update modified time for archive file {:?}: {}", archive_path, e))?;
+            }
             
             Ok(())
         })

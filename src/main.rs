@@ -81,7 +81,7 @@ pub struct Settings {
     /// Language code for JSON input
     #[arg(short='l', long, default_value_t = String::from("en_US"), requires = "json")]
     lang: String,
-    /// Process only files newer than existing outputs
+    /// Process only files newer than existing outputs, also updates timestamps on source files
     #[arg(short='n', long="newer", default_value_t = false)]
     pub newer_only: bool,
     /// Use same format as tool "msgenc" for encoding messages
