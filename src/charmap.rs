@@ -95,12 +95,15 @@ pub fn decode_charmap(content: &str) -> Result<Charmap, Box<dyn std::error::Erro
     })
 }
 
+#[allow(dead_code)]
 pub fn default_charmap() -> Charmap {
     decode_charmap(include_str!("../charmap.json")).expect("Failed to decode embedded charmap")
 }
 
+#[allow(dead_code)]
 static DEFAULT_CHARMAP: std::sync::OnceLock<Charmap> = std::sync::OnceLock::new();
 
+#[allow(dead_code)]
 pub fn get_default_charmap() -> &'static Charmap {
     DEFAULT_CHARMAP.get_or_init(|| default_charmap())
 }
