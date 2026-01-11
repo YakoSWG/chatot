@@ -2,6 +2,9 @@ pub mod charmap;
 pub mod decode;
 pub mod encode;
 
+pub use charmap::{Charmap, get_default_charmap};
+pub use decode::{TextArchive, decode_archive};
+
 // Define common types used across modules
 use std::path::PathBuf;
 
@@ -24,4 +27,3 @@ pub struct Settings {
     pub newer_only: bool,
     pub msgenc_format: bool,
 }
-

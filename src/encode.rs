@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::io::Cursor;
-use std::mem::size_of;
-use byteorder::{WriteBytesExt, LittleEndian};
+use byteorder::{LittleEndian, WriteBytesExt};
 use rayon::prelude::*;
 use serde_derive::Deserialize;
 use serde_json;
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::mem::size_of;
 
 use crate::charmap;
 
@@ -40,7 +40,6 @@ pub fn encode_texts(
     destination: &crate::BinarySource,
     settings: &crate::Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    
     // Get list of text files
     let text_files = if let Some(files) = &source.txt {
         files.clone()
@@ -78,25 +77,43 @@ pub fn encode_texts(
         .into_iter()
         .zip(archive_files.into_iter())
         .collect();
-    
+
     let results: Vec<Result<(), String>> = text_archive_pairs
         .par_iter()
         .map(|(text_path, archive_path)| {
-
             // Check if newer_only setting is enabled and skip if destination is newer
             if settings.newer_only {
                 if text_path.exists() {
-                    let archive_metadata = std::fs::metadata(archive_path)
-                        .map_err(|e| format!("Failed to get metadata for archive {:?}: {}", archive_path, e))?;
-                    let text_metadata = std::fs::metadata(text_path)
-                        .map_err(|e| format!("Failed to get metadata for text file {:?}: {}", text_path, e))?;
-                    let archive_modified = archive_metadata.modified()
-                        .map_err(|e| format!("Failed to get modified time for archive {:?}: {}", archive_path, e))?;
-                    let text_modified = text_metadata.modified()
-                        .map_err(|e| format!("Failed to get modified time for text file {:?}: {}", text_path, e))?;
+                    let archive_metadata = std::fs::metadata(archive_path).map_err(|e| {
+                        format!(
+                            "Failed to get metadata for archive {:?}: {}",
+                            archive_path, e
+                        )
+                    })?;
+                    let text_metadata = std::fs::metadata(text_path).map_err(|e| {
+                        format!(
+                            "Failed to get metadata for text file {:?}: {}",
+                            text_path, e
+                        )
+                    })?;
+                    let archive_modified = archive_metadata.modified().map_err(|e| {
+                        format!(
+                            "Failed to get modified time for archive {:?}: {}",
+                            archive_path, e
+                        )
+                    })?;
+                    let text_modified = text_metadata.modified().map_err(|e| {
+                        format!(
+                            "Failed to get modified time for text file {:?}: {}",
+                            text_path, e
+                        )
+                    })?;
                     if archive_modified >= text_modified {
                         #[cfg(debug_assertions)]
-                        println!("Skipping decoding of {:?} as destination {:?} is newer", archive_path, text_path);
+                        println!(
+                            "Skipping decoding of {:?} as destination {:?} is newer",
+                            archive_path, text_path
+                        );
                         return Ok(());
                     }
                 }
@@ -119,14 +136,26 @@ pub fn encode_texts(
 
             if settings.newer_only {
                 // Update timestamp on source text file to match destination archive
-                let archive_metadata = std::fs::metadata(archive_path)
-                    .map_err(|e| format!("Failed to get metadata for archive {:?}: {}", archive_path, e))?;
-                let modified_time = archive_metadata.modified()
-                    .map_err(|e| format!("Failed to get modified time for archive {:?}: {}", archive_path, e))?;
+                let archive_metadata = std::fs::metadata(archive_path).map_err(|e| {
+                    format!(
+                        "Failed to get metadata for archive {:?}: {}",
+                        archive_path, e
+                    )
+                })?;
+                let modified_time = archive_metadata.modified().map_err(|e| {
+                    format!(
+                        "Failed to get modified time for archive {:?}: {}",
+                        archive_path, e
+                    )
+                })?;
                 let text_file = std::fs::File::open(text_path)
                     .map_err(|e| format!("Failed to open text file {:?}: {}", text_path, e))?;
-                text_file.set_modified(modified_time)
-                    .map_err(|e| format!("Failed to update modified time for text file {:?}: {}", text_path, e))?;
+                text_file.set_modified(modified_time).map_err(|e| {
+                    format!(
+                        "Failed to update modified time for text file {:?}: {}",
+                        text_path, e
+                    )
+                })?;
             }
 
             Ok(())
@@ -150,7 +179,6 @@ fn encode_text(
     let mut messages: Vec<String> = Vec::new();
 
     for line in text.lines() {
-
         // First line is key (// Key: XXXX)
         if let Some(key_str) = line.strip_prefix("// Key: ") {
             key = parse_hex_or_decimal(key_str.trim()) as u16;
@@ -173,7 +201,6 @@ fn encode_json(
     json_content: &str,
     lang: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-
     // Some JSON files may start with a UTF-8 BOM (U+FEFF). Trim it so
     // serde_json doesn't fail with "expected value at line 1 column 1".
     let content = json_content.trim_start_matches('\u{FEFF}');
@@ -190,16 +217,18 @@ fn encode_json(
 
         let message_str = match content {
             MessageContent::Single(s) => s.clone(),
-            MessageContent::Multi(lines) => {
-                lines.join("")
-            }
+            MessageContent::Multi(lines) => lines.join(""),
         };
 
         messages.push(message_str);
     }
-    
+
     #[cfg(debug_assertions)]
-    println!("Encoding JSON with key: 0x{:04X}, messages: {}", parsed.key, messages.len());
+    println!(
+        "Encoding JSON with key: 0x{:04X}, messages: {}",
+        parsed.key,
+        messages.len()
+    );
 
     encode_messages(charmap, parsed.key, &messages, false)
 }
@@ -210,7 +239,6 @@ fn encode_messages(
     messages: &[String],
     msgenc_format: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-
     let mut message_index = 0usize;
 
     // Create message table
@@ -302,26 +330,26 @@ fn encode_string_to_message(
     charmap: &charmap::Charmap,
     text: &str,
     msgenc_format: bool,
-) -> Vec<u16>{
+) -> Vec<u16> {
     let mut message_codes = Vec::new();
 
     let mut chars = text.chars().peekable();
 
     while let Some(ch) = chars.next() {
         let ch_str = ch.to_string();
-        
+
         // Try single character lookup
         if charmap.encode_map.contains_key(&ch_str) {
             let code = charmap.encode_map.get(&ch_str).unwrap();
             message_codes.push(*code);
             continue;
-        } 
+        }
         // Try multi-character aliases (wrapped in square brackets)
         else if ch == '[' {
             // Find the closing bracket
             let mut alias = String::from("[");
             let mut found_closing = false;
-            
+
             while let Some(&next_ch) = chars.peek() {
                 alias.push(next_ch);
                 chars.next();
@@ -341,8 +369,8 @@ fn encode_string_to_message(
                 eprintln!("Warning: unmatched '[' in text. Inserting null code.");
             }
             message_codes.push(0);
-            continue;    
-        }            
+            continue;
+        }
         // Escape sequences (\xXXXX or \n, \r, etc.)
         else if ch == '\\' {
             if let Some(&next_ch) = chars.peek() {
@@ -358,13 +386,15 @@ fn encode_string_to_message(
                             break;
                         }
                     }
-                    
+
                     if hex_str.len() == 4 {
                         if let Ok(code) = u16::from_str_radix(&hex_str, 16) {
                             message_codes.push(code);
                             continue;
                         } else {
-                            eprintln!("Warning: invalid escape sequence '\\x{hex_str}'. Inserting null code.");
+                            eprintln!(
+                                "Warning: invalid escape sequence '\\x{hex_str}'. Inserting null code."
+                            );
                             message_codes.push(0);
                             continue;
                         }
@@ -377,29 +407,33 @@ fn encode_string_to_message(
                     // Try two-character escape sequence like \n, \r
                     let escape_seq = format!("\\{}", next_ch);
                     chars.next(); // consume next character
-                    
+
                     if charmap.encode_map.contains_key(&escape_seq) {
                         let code = charmap.encode_map.get(&escape_seq).unwrap();
                         message_codes.push(*code);
                         continue;
                     } else {
-                        eprintln!("Warning: unknown escape sequence '{escape_seq}'. Inserting null code.");
+                        eprintln!(
+                            "Warning: unknown escape sequence '{escape_seq}'. Inserting null code."
+                        );
                         message_codes.push(0);
                         continue;
                     }
                 }
             } else {
-                eprintln!("Warning: incomplete escape sequence at end of text. Inserting null code.");
+                eprintln!(
+                    "Warning: incomplete escape sequence at end of text. Inserting null code."
+                );
                 message_codes.push(0);
                 continue;
-            }       
+            }
         }
         // Command style sequences
         else if ch == '{' {
             // Find the closing brace
             let mut command_str = String::new();
             let mut found_closing = false;
-            
+
             while let Some(&next_ch) = chars.peek() {
                 if next_ch == '}' {
                     chars.next(); // consume '}'
@@ -435,13 +469,11 @@ fn encode_string_to_message(
                 let name_codes = encode_trainer_name(charmap, &name_str);
                 message_codes.extend(name_codes);
                 break; // end of message
-            }
-            else if msgenc_format {
+            } else if msgenc_format {
                 let command_codes = encode_command_msgenc(charmap, &command_str);
                 message_codes.extend(command_codes);
                 continue;
-            }
-            else {
+            } else {
                 let command_codes = encode_command(charmap, &command_str);
                 message_codes.extend(command_codes);
                 continue;
@@ -461,11 +493,7 @@ fn encode_string_to_message(
     message_codes
 }
 
-
-fn encode_command(
-    charmap: &charmap::Charmap,
-    command_str: &str
-) -> Vec<u16> {
+fn encode_command(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
     let mut command_codes = Vec::new();
 
     // Split command and arguments
@@ -473,19 +501,29 @@ fn encode_command(
 
     // Ensure there is at least a command name and the special byte which is OR'ed with it
     if parts.len() < 2 {
-        eprintln!("Warning: invalid command format '{}'. Inserting null code.", command_str);
+        eprintln!(
+            "Warning: invalid command format '{}'. Inserting null code.",
+            command_str
+        );
         command_codes.push(0);
         return command_codes;
     }
 
     // First part is command
     let command_name = parts[0];
-    
-    let mut command_code = match charmap.command_map.iter().find(|(_, name)| *name == command_name) {
+
+    let mut command_code = match charmap
+        .command_map
+        .iter()
+        .find(|(_, name)| *name == command_name)
+    {
         Some((code, _)) => *code,
         None => {
             let code = parse_hex_or_decimal(command_name) as u16;
-            eprintln!("Warning: unknown command name '{}'. Using code 0x{:04X}.", command_name, code);
+            eprintln!(
+                "Warning: unknown command name '{}'. Using code 0x{:04X}.",
+                command_name, code
+            );
             code
         }
     };
@@ -513,10 +551,7 @@ fn encode_command(
     command_codes
 }
 
-fn encode_command_msgenc(
-    charmap: &charmap::Charmap,
-    command_str: &str
-) -> Vec<u16> {
+fn encode_command_msgenc(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
     let mut command_codes = Vec::new();
 
     // Opinion: I don't understand why msgenc uses this different format for commands.
@@ -531,11 +566,18 @@ fn encode_command_msgenc(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let mut command_code = match charmap.command_map.iter().find(|(_, name)| *name == command_name) {
+    let mut command_code = match charmap
+        .command_map
+        .iter()
+        .find(|(_, name)| *name == command_name)
+    {
         Some((code, _)) => *code,
         None => {
             let code = parse_hex_or_decimal(command_name) as u16;
-            eprintln!("Warning: unknown command name '{}'. Using code 0x{:04X}.", command_name, code);
+            eprintln!(
+                "Warning: unknown command name '{}'. Using code 0x{:04X}.",
+                command_name, code
+            );
             code
         }
     };
@@ -574,10 +616,7 @@ fn encode_command_msgenc(
     command_codes
 }
 
-fn encode_trainer_name(
-    charmap: &charmap::Charmap,
-    name_str: &str,
-) -> Vec<u16> {
+fn encode_trainer_name(charmap: &charmap::Charmap, name_str: &str) -> Vec<u16> {
     let mut name_codes = Vec::new();
 
     name_codes.push(0xF100); // Trainer name command code
@@ -590,7 +629,10 @@ fn encode_trainer_name(
         let code = if charmap.encode_map.contains_key(&ch.to_string()) {
             *charmap.encode_map.get(&ch.to_string()).unwrap()
         } else {
-            eprintln!("Warning: unknown character '{}' in trainer name. Using null code.", ch);
+            eprintln!(
+                "Warning: unknown character '{}' in trainer name. Using null code.",
+                ch
+            );
             0
         };
 
@@ -621,5 +663,5 @@ fn parse_hex_or_decimal(number_str: &str) -> u32 {
     } else {
         number_str.parse::<u32>().unwrap_or(0)
     };
-    number    
+    number
 }

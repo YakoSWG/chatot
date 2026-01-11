@@ -1,25 +1,29 @@
-use std::{collections::{HashMap, HashSet}, io::Cursor};
-use byteorder::{ReadBytesExt, LittleEndian};
+use byteorder::{LittleEndian, ReadBytesExt};
 use rayon::prelude::*;
-use serde_derive::{Serialize, Deserialize};
+use serde_derive::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Cursor,
+};
 
 use crate::charmap;
 
-struct TextArchive {
-    key: u16,
-    messages: Vec<String>,
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TextArchive {
+    pub key: u16,
+    pub messages: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct JsonMessage {
-    id: String,
+pub struct JsonMessage {
+    pub id: String,
     #[serde(flatten)]
-    lang_message: HashMap<String, MessageContent>
+    pub lang_message: HashMap<String, MessageContent>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
-enum MessageContent {
+pub enum MessageContent {
     Single(String),
     Multi(Vec<String>),
 }
@@ -41,7 +45,6 @@ pub fn decode_archives(
     destination: &crate::TextSource,
     settings: &crate::Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    
     // Get list of archive files
     let archive_files = if let Some(files) = &source.archive {
         files.clone()
@@ -81,25 +84,43 @@ pub fn decode_archives(
         .into_iter()
         .zip(text_files.into_iter())
         .collect();
-    
+
     let results: Vec<Result<(), String>> = archive_text_pairs
         .par_iter()
         .map(|(archive_path, text_path)| {
-
             // Check newer_only setting is enabled and skip if destination is newer
             if settings.newer_only {
                 if text_path.exists() {
-                    let archive_metadata = std::fs::metadata(archive_path)
-                        .map_err(|e| format!("Failed to get metadata for archive {:?}: {}", archive_path, e))?;
-                    let text_metadata = std::fs::metadata(text_path)
-                        .map_err(|e| format!("Failed to get metadata for text file {:?}: {}", text_path, e))?;
-                    let archive_modified = archive_metadata.modified()
-                        .map_err(|e| format!("Failed to get modified time for archive {:?}: {}", archive_path, e))?;
-                    let text_modified = text_metadata.modified()
-                        .map_err(|e| format!("Failed to get modified time for text file {:?}: {}", text_path, e))?;
+                    let archive_metadata = std::fs::metadata(archive_path).map_err(|e| {
+                        format!(
+                            "Failed to get metadata for archive {:?}: {}",
+                            archive_path, e
+                        )
+                    })?;
+                    let text_metadata = std::fs::metadata(text_path).map_err(|e| {
+                        format!(
+                            "Failed to get metadata for text file {:?}: {}",
+                            text_path, e
+                        )
+                    })?;
+                    let archive_modified = archive_metadata.modified().map_err(|e| {
+                        format!(
+                            "Failed to get modified time for archive {:?}: {}",
+                            archive_path, e
+                        )
+                    })?;
+                    let text_modified = text_metadata.modified().map_err(|e| {
+                        format!(
+                            "Failed to get modified time for text file {:?}: {}",
+                            text_path, e
+                        )
+                    })?;
                     if archive_modified <= text_modified {
                         #[cfg(debug_assertions)]
-                        println!("Skipping decoding of {:?} as destination {:?} is newer", archive_path, text_path);
+                        println!(
+                            "Skipping decoding of {:?} as destination {:?} is newer",
+                            archive_path, text_path
+                        );
                         return Ok(());
                     }
                 }
@@ -110,29 +131,45 @@ pub fn decode_archives(
 
             let archive_file = std::fs::read(archive_path)
                 .map_err(|e| format!("Failed to read archive {:?}: {}", archive_path, e))?;
-            let archive = decode_archive(&charmap, &archive_file, settings.msgenc_format)
+            let mut cursor = Cursor::new(&archive_file);
+            let archive = decode_archive(&charmap, &mut cursor, settings.msgenc_format)
                 .map_err(|e| format!("Failed to decode archive {:?}: {}", archive_path, e))?;
 
             if settings.json {
-                write_decoded_json(&archive, text_path, settings.lang.clone())
-                    .map_err(|e| format!("Failed to write decoded JSON to {:?}: {}", text_path, e))?;
+                write_decoded_json(&archive, text_path, settings.lang.clone()).map_err(|e| {
+                    format!("Failed to write decoded JSON to {:?}: {}", text_path, e)
+                })?;
             } else {
-                write_decoded_text(&archive, text_path, settings.msgenc_format)
-                    .map_err(|e| format!("Failed to write decoded text to {:?}: {}", text_path, e))?;
+                write_decoded_text(&archive, text_path, settings.msgenc_format).map_err(|e| {
+                    format!("Failed to write decoded text to {:?}: {}", text_path, e)
+                })?;
             }
 
             if settings.newer_only {
                 // Update source archive file timestamp to match destination text file
-                let text_metadata = std::fs::metadata(text_path)
-                    .map_err(|e| format!("Failed to get metadata for text file {:?}: {}", text_path, e))?;
-                let modified_time = text_metadata.modified()
-                    .map_err(|e| format!("Failed to get modified time for text file {:?}: {}", text_path, e))?;
-                let archive_file = std::fs::File::open(archive_path)
-                    .map_err(|e| format!("Failed to open archive file {:?}: {}", archive_path, e))?;
-                archive_file.set_modified(modified_time)
-                    .map_err(|e| format!("Failed to update modified time for archive file {:?}: {}", archive_path, e))?;
+                let text_metadata = std::fs::metadata(text_path).map_err(|e| {
+                    format!(
+                        "Failed to get metadata for text file {:?}: {}",
+                        text_path, e
+                    )
+                })?;
+                let modified_time = text_metadata.modified().map_err(|e| {
+                    format!(
+                        "Failed to get modified time for text file {:?}: {}",
+                        text_path, e
+                    )
+                })?;
+                let archive_file = std::fs::File::open(archive_path).map_err(|e| {
+                    format!("Failed to open archive file {:?}: {}", archive_path, e)
+                })?;
+                archive_file.set_modified(modified_time).map_err(|e| {
+                    format!(
+                        "Failed to update modified time for archive file {:?}: {}",
+                        archive_path, e
+                    )
+                })?;
             }
-            
+
             Ok(())
         })
         .collect();
@@ -150,9 +187,8 @@ fn write_decoded_text(
     text_path: &std::path::PathBuf,
     msgenc_format: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    
     let mut content = archive.messages.join("\n");
-    
+
     if !msgenc_format {
         // Prepend key as comment
         content = format!("// Key: 0x{:04X}\n{}", archive.key, content);
@@ -160,7 +196,7 @@ fn write_decoded_text(
 
     content.push('\n'); // Add trailing newline
     std::fs::write(text_path, content)?;
-    
+
     Ok(())
 }
 
@@ -169,7 +205,6 @@ fn write_decoded_json(
     text_path: &std::path::PathBuf,
     lang: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-
     // Determine archive name from text_path file name
     let archive_name = text_path
         .file_stem()
@@ -190,26 +225,28 @@ fn write_decoded_json(
 
     let mut seen_ids: HashSet<String> = HashSet::new();
 
-    let mut json_messages: Vec<JsonMessage> = archive.messages
+    let mut json_messages: Vec<JsonMessage> = archive
+        .messages
         .iter()
         .enumerate()
         .map(|(idx, msg)| {
             let id = format!("msg_{}_{:05}", archive_name, idx);
             seen_ids.insert(id.clone());
-            
+
             // Split message by literal \n, \r or \f sequences
             // This gives us pretty printing while keeping the custom line breaks intact
             let mut lines: Vec<String> = Vec::new();
             let mut current = String::new();
-            
+
             for ch in msg.chars() {
                 current.push(ch);
-                if current.ends_with("\\n") || current.ends_with("\\r") || current.ends_with("\\f") {
+                if current.ends_with("\\n") || current.ends_with("\\r") || current.ends_with("\\f")
+                {
                     lines.push(current.clone());
                     current.clear();
                 }
             }
-            
+
             if !current.is_empty() {
                 lines.push(current);
             }
@@ -220,10 +257,10 @@ fn write_decoded_json(
                 MessageContent::Multi(lines)
             };
 
-            // Start from existing message if present to merge languages
-            let mut merged = existing_messages
-                .remove(&id)
-                .unwrap_or(JsonMessage { id: id.clone(), lang_message: HashMap::new() });
+            let mut merged = existing_messages.remove(&id).unwrap_or(JsonMessage {
+                id: id.clone(),
+                lang_message: HashMap::new(),
+            });
 
             merged.lang_message.insert(lang.clone(), content);
             merged
@@ -241,40 +278,32 @@ fn write_decoded_json(
         key: archive.key,
         messages: json_messages,
     };
-    
+
     let json_string = serde_json::to_string_pretty(&output)?;
     std::fs::write(text_path, json_string)?;
-    
+
     Ok(())
 }
 
-fn decode_archive(
-    charmap: &charmap::Charmap, 
-    archive_file: &Vec<u8>,
+pub fn decode_archive<R: std::io::Read + std::io::Seek>(
+    charmap: &charmap::Charmap,
+    reader: &mut R,
     msgenc_format: bool,
 ) -> Result<TextArchive, Box<dyn std::error::Error>> {
-    
-    let mut archive = Cursor::new(archive_file  );
-
     // Read u16 message count (2 bytes)
-    let message_count = archive.read_u16::<LittleEndian>()?;
-
-    let mut messages = Vec::with_capacity( (message_count as usize) * 40); // Rough estimate
-
+    let message_count = reader.read_u16::<LittleEndian>()?;
+    let mut messages = Vec::with_capacity((message_count as usize) * 40); // Rough estimate
     // Read u16 key (2 bytes)
-    let key = archive.read_u16::<LittleEndian>()?;
-
-    #[cfg(debug_assertions)]
-    println!("Decoding archive with {} messages, key=0x{:04X}", message_count, key);
+    let key = reader.read_u16::<LittleEndian>()?;
 
     // Read message table entries
     let mut message_table = Vec::new();
     for i in 0..message_count {
-        let mut offset = archive.read_u32::<LittleEndian>()?;
-        let mut length = archive.read_u32::<LittleEndian>()?;
+        let mut offset = reader.read_u32::<LittleEndian>()?;
+        let mut length = reader.read_u32::<LittleEndian>()?;
 
         let mut local_key: u32 = 765;
-        local_key = local_key.wrapping_mul((i+1) as u32);
+        local_key = local_key.wrapping_mul((i + 1) as u32);
         local_key = local_key.wrapping_mul(key as u32);
         local_key &= 0xFFFF;
 
@@ -287,17 +316,23 @@ fn decode_archive(
 
     // Read and decode messages
     for (i, entry) in message_table.iter().enumerate() {
-        
         // Ensure offset and length are within bounds (length is in u16 units)
-        if (entry.offset as usize + (entry.length * 2) as usize) > archive.get_ref().len() {
-            return Err(format!("Invalid message entry offset/length: offset={}, length={}", entry.offset, entry.length).into());
+        // Check if seeking to the end of the message would fail
+        let end_position = entry.offset as u64 + (entry.length as u64 * 2);
+        if let Err(_) = reader.seek(std::io::SeekFrom::Start(end_position)) {
+            return Err(format!(
+                "Invalid message entry offset/length: offset={}, length={}",
+                entry.offset, entry.length
+            )
+            .into());
         }
 
-        archive.set_position(entry.offset as u64);
+        // Seek back to the actual message start position
+        reader.seek(std::io::SeekFrom::Start(entry.offset as u64))?;
         let mut encrypted_message = vec![0u16; entry.length as usize];
         encrypted_message
             .iter_mut()
-            .for_each(|c| *c = archive.read_u16::<LittleEndian>().unwrap());
+            .for_each(|c| *c = reader.read_u16::<LittleEndian>().unwrap());
         let decrypted_message = decrypt_message(&encrypted_message, (i + 1) as u16);
 
         let message_string = decode_message_to_string(&charmap, &decrypted_message, msgenc_format);
@@ -306,7 +341,6 @@ fn decode_archive(
 
     Ok(TextArchive { key, messages })
 }
-
 
 fn decrypt_message(encrypted_message: &Vec<u16>, index: u16) -> Vec<u16> {
     let mut decrypted_message = Vec::with_capacity(encrypted_message.len());
@@ -322,68 +356,69 @@ fn decrypt_message(encrypted_message: &Vec<u16>, index: u16) -> Vec<u16> {
     decrypted_message
 }
 
-fn decode_message_to_string(
-    charmap: &charmap::Charmap, 
-    decrypted_message: &Vec<u16>, 
+pub fn decode_message_to_string(
+    charmap: &charmap::Charmap,
+    decrypted_message: &Vec<u16>,
     msgenc_format: bool,
 ) -> String {
-
     let mut i = 0;
     let mut result = String::new();
 
     while i < decrypted_message.len() {
-
         let code = decrypted_message[i];
 
         // Termination character
         if code == 0xFFFF {
             break;
-        }
         // Special Command Character
-        else if code == 0xFFFE {
-            let (command, to_skip) = decode_command(charmap, &decrypted_message[i..], msgenc_format);
+        } else if code == 0xFFFE {
+            let (command, to_skip) =
+                decode_command(charmap, &decrypted_message[i..], msgenc_format);
             result.push_str(&command);
             i += to_skip;
-        }
         // Trainer Name
-        else if code == 0xF100 {
-            let (trainer_name, to_skip) = decode_trainer_name(charmap, &decrypted_message[i..], msgenc_format);
+        } else if code == 0xF100 {
+            let (trainer_name, to_skip) =
+                decode_trainer_name(charmap, &decrypted_message[i..], msgenc_format);
             result.push_str(&trainer_name);
             i += to_skip;
-        }
         // Regular character
-        else if charmap.decode_map.contains_key(&code) {
+        } else if charmap.decode_map.contains_key(&code) {
             let character = charmap.decode_map.get(&code).unwrap();
             result.push_str(character);
             i += 1;
         }
         // Unknown character code
         else {
-            eprintln!("Warning: unknown character code 0x{:04X} encountered during decoding", code);
+            eprintln!(
+                "Warning: unknown character code 0x{:04X} encountered during decoding",
+                code
+            );
             result.push_str(&format!("\\x{:04X}", code));
             i += 1;
         }
-
     }
 
     if (i + 1) < decrypted_message.len() {
-        eprintln!("Warning: extra data found after termination character in message. Ignoring remaining {} character codes.", decrypted_message.len() - (i + 1));
+        eprintln!(
+            "Warning: extra data found after termination character in message. Ignoring remaining {} character codes.",
+            decrypted_message.len() - (i + 1)
+        );
     }
 
     result
-    
 }
 
 fn decode_command(
-    charmap: &charmap::Charmap, 
-    message_slice: &[u16], 
-    msgenc_format: bool
+    charmap: &charmap::Charmap,
+    message_slice: &[u16],
+    msgenc_format: bool,
 ) -> (String, usize) {
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xFFFE code
 
     // Stray command code
-    if message_slice.len() < 1 {
+    if message_slice.is_empty() {
         eprintln!("Warning: stray command code 0xFFFE encountered with no following data");
         result.push_str("\\xFFFE");
         return (result, to_skip);
@@ -416,9 +451,11 @@ fn decode_command(
 
     let mut special_byte: u16 = 0;
 
-    if !charmap.command_map.contains_key(&command_code) && charmap.command_map.contains_key(&(command_code & 0xFF00)) {
+    if !charmap.command_map.contains_key(&command_code)
+        && charmap.command_map.contains_key(&(command_code & 0xFF00))
+    {
         special_byte = command_code & 0x00FF;
-        command_code = command_code & 0xFF00;     
+        command_code &= 0xFF00;
     }
 
     let command_str = if let Some(cmd) = charmap.command_map.get(&command_code) {
@@ -461,14 +498,12 @@ fn decode_command(
 
         (result, to_skip)
     }
-
 }
-    
 
 fn decode_trainer_name(
     charmap: &charmap::Charmap,
-    message_slice: &[u16], 
-    msgenc_format: bool
+    message_slice: &[u16],
+    msgenc_format: bool,
 ) -> (String, usize) {
     let mut result = String::new();
     let mut to_skip = 1; // Skip the 0xF100 code
@@ -488,7 +523,6 @@ fn decode_trainer_name(
     }
 
     while index < message_slice.len() {
-
         let mut code = (message_slice[index] >> bit) & 0x1FF;
         bit += 9;
 

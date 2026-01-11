@@ -25,7 +25,11 @@ struct RawCharEntry {
 
 pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
-    let raw: RawCharmap = serde_json::from_str(&content)?;
+    decode_charmap(&content)
+}
+
+pub fn decode_charmap(content: &str) -> Result<Charmap, Box<dyn std::error::Error>> {
+    let raw: RawCharmap = serde_json::from_str(content)?;
 
     let mut decode_map = HashMap::with_capacity(raw.char_map.len());
     let mut encode_map = HashMap::with_capacity(raw.char_map.len());
@@ -60,19 +64,22 @@ pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error
 
         // Only insert the alias if it doesn't already exist in the encode map
         if encode_map.contains_key(&alias) {
-            eprintln!("Warning: alias '{alias}' for code {code:04X} conflicts with existing entry, ignored");
+            eprintln!(
+                "Warning: alias '{alias}' for code {code:04X} conflicts with existing entry, ignored"
+            );
             continue;
         }
 
         // Multi character aliases must be wrapped in square brackets
         if alias.chars().count() > 1 && !(alias.starts_with('[') && alias.ends_with(']')) {
-            eprintln!("Warning: multi-character alias '{alias}' for code {code:04X} must be wrapped in square brackets, ignored");
+            eprintln!(
+                "Warning: multi-character alias '{alias}' for code {code:04X} must be wrapped in square brackets, ignored"
+            );
             continue;
         }
 
         encode_map.entry(alias).or_insert(code);
     }
-
 
     let mut command_map = HashMap::with_capacity(raw.command_map.len());
     for (code_str, name) in raw.command_map {
@@ -86,4 +93,14 @@ pub fn read_charmap(path: &PathBuf) -> Result<Charmap, Box<dyn std::error::Error
         decode_map,
         command_map,
     })
+}
+
+pub fn default_charmap() -> Charmap {
+    decode_charmap(include_str!("../charmap.json")).expect("Failed to decode embedded charmap")
+}
+
+static DEFAULT_CHARMAP: std::sync::OnceLock<Charmap> = std::sync::OnceLock::new();
+
+pub fn get_default_charmap() -> &'static Charmap {
+    DEFAULT_CHARMAP.get_or_init(|| default_charmap())
 }
