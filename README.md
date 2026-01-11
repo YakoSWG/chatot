@@ -1,3 +1,5 @@
+<img src="docs/chatot.gif" align="right" width="120" alt="Animated sprite of Chatot from Pokemon Black and White"/>
+
 # Chatot
 
 Text archive decoder and encoder for Generation IV Pokémon games.
