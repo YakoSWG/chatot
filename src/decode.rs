@@ -430,7 +430,10 @@ fn decode_command(
 
     // No param count (invalid)
     if message_slice.len() < 2 {
-        eprintln!("Warning: command code 0x{:04X} encountered with no parameter count", command_code);
+        eprintln!(
+            "Warning: command code 0x{:04X} encountered with no parameter count",
+            command_code
+        );
         result.push_str(&format!("\\xFFFE\\x{:04X}", command_code));
         return (result, to_skip);
     }
@@ -441,8 +444,16 @@ fn decode_command(
 
     // Not enough data for parameters
     if message_slice.len() < (3 + param_count as usize) {
-        eprintln!("Warning: command code 0x{:04X} encountered with insufficient parameters (expected {}, found {})", command_code, param_count, message_slice.len() - 3);
-        result.push_str(&format!("\\xFFFE\\x{:04X}\\x{:04X}", command_code, param_count));
+        eprintln!(
+            "Warning: command code 0x{:04X} encountered with insufficient parameters (expected {}, found {})",
+            command_code,
+            param_count,
+            message_slice.len() - 3
+        );
+        result.push_str(&format!(
+            "\\xFFFE\\x{:04X}\\x{:04X}",
+            command_code, param_count
+        ));
         return (result, to_skip);
     }
 
@@ -461,7 +472,10 @@ fn decode_command(
     let command_str = if let Some(cmd) = charmap.command_map.get(&command_code) {
         cmd.clone()
     } else {
-        eprintln!("Warning: unknown command code 0x{:04X} encountered during decoding", command_code);
+        eprintln!(
+            "Warning: unknown command code 0x{:04X} encountered during decoding",
+            command_code
+        );
         format!("0x{:04X}", command_code)
     };
 
@@ -476,7 +490,7 @@ fn decode_command(
         result.push_str(&format!("{{{}, {}}}", command_str, param_str));
 
         (result, to_skip)
-    } 
+    }
     // Msgenc format
     else {
         // msgenc format omits the special byte if it is zero
@@ -514,8 +528,7 @@ fn decode_trainer_name(
 
     if !msgenc_format {
         result.push_str("{TRAINER_NAME:");
-    }
-    else {
+    } else {
         // msgenc treats the entire rest of the message as trainer name until termination where it just stops
         // this can in theory lead to issues if there are extra codes after the trainer name
         // this doesn't happen in the vanilla games but it's something to be aware of
