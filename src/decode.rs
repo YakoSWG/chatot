@@ -90,7 +90,7 @@ pub fn decode_archives(
         .map(|(archive_path, text_path)| {
             // Check newer_only setting is enabled and skip if destination is newer
             if settings.newer_only {
-                if text_path.exists() {
+                if text_path.exists() && archive_path.exists() {
                     let archive_metadata = std::fs::metadata(archive_path).map_err(|e| {
                         format!(
                             "Failed to get metadata for archive {:?}: {}",

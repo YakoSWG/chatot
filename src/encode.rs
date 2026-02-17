@@ -83,7 +83,7 @@ pub fn encode_texts(
         .map(|(text_path, archive_path)| {
             // Check if newer_only setting is enabled and skip if destination is newer
             if settings.newer_only {
-                if text_path.exists() {
+                if text_path.exists() && archive_path.exists() {
                     let archive_metadata = std::fs::metadata(archive_path).map_err(|e| {
                         format!(
                             "Failed to get metadata for archive {:?}: {}",
