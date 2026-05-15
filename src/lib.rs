@@ -4,6 +4,7 @@ pub mod encode;
 
 pub use charmap::{Charmap, get_default_charmap};
 pub use decode::{TextArchive, decode_archive};
+pub use encode::{DiagnosticContext, ErrorFormat, validate_message};
 
 // Define common types used across modules
 use std::path::PathBuf;
