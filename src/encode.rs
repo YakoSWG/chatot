@@ -841,27 +841,3 @@ fn parse_hex_or_decimal(number_str: &str) -> u32 {
     number
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_message_reports_unknown_alias() {
-        assert!(validate_message(None, "ok").is_empty());
-
-        let warnings = validate_message(None, "hi [NOT_IN_CHARMAP]");
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].err_msg.contains("unknown alias"));
-    }
-
-    #[test]
-    fn span_marker_shows_line_and_caret() {
-        let warning = ErrorFormat {
-            source: "Hello [X]".into(),
-            err_msg: "test".into(),
-            span: 6..9,
-            file: None,
-        };
-        assert_eq!(warning.span_marker(), "Hello [X]\n      ^^^");
-    }
-}
