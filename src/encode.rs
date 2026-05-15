@@ -5,6 +5,8 @@ use serde_json;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::mem::size_of;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use crate::charmap;
 
@@ -32,6 +34,54 @@ enum MessageContent {
 struct JsonInput {
     key: u16,
     messages: Vec<JsonMessage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ErrorFormat {
+    /// The message string being encoded.
+    pub source: String,
+    pub err_msg: String,
+    pub span: Range<usize>,
+    pub file: Option<PathBuf>,
+}
+
+pub struct DiagnosticContext<'a> {
+    pub source: &'a str,
+    pub file: Option<&'a Path>,
+    /// Byte range of the current issue within `source`.
+    pub span: Range<usize>,
+}
+
+impl ErrorFormat {
+    /// The source line containing the span, plus a caret row (byte offsets).
+    pub fn span_marker(&self) -> String {
+        let start = self.span.start.min(self.source.len());
+        let line_start = self.source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = self.source[start..]
+            .find('\n')
+            .map(|i| start + i)
+            .unwrap_or(self.source.len());
+        let col = start - line_start;
+        let carets = "^".repeat(self.span.end.saturating_sub(self.span.start).max(1));
+        format!(
+            "{}\n{}{carets}",
+            &self.source[line_start..line_end],
+            " ".repeat(col)
+        )
+    }
+}
+
+#[allow(dead_code)]
+pub fn validate_message(charmap: Option<&charmap::Charmap>, message: &str) -> Vec<ErrorFormat> {
+    let charmap = charmap.unwrap_or(charmap::get_default_charmap());
+    let mut warnings = Vec::new();
+    let mut ctx = DiagnosticContext {
+        source: message,
+        file: None,
+        span: 0..0,
+    };
+    encode_string_to_message(charmap, message, false, &mut warnings, &mut ctx);
+    warnings
 }
 
 pub fn encode_texts(
@@ -125,11 +175,16 @@ pub fn encode_texts(
             let text_content = std::fs::read_to_string(text_path)
                 .map_err(|e| format!("Failed to read text {:?}: {}", text_path, e))?;
             let encoded_data = if settings.json {
-                encode_json(&charmap, &text_content, &settings.lang)
+                encode_json(&charmap, &text_content, &settings.lang, Some(&text_path))
                     .map_err(|e| format!("Failed to encode JSON {:?}: {}", text_path, e))?
             } else {
-                encode_text(&charmap, &text_content, settings.msgenc_format)
-                    .map_err(|e| format!("Failed to encode text {:?}: {}", text_path, e))?
+                encode_text(
+                    &charmap,
+                    &text_content,
+                    settings.msgenc_format,
+                    Some(&text_path),
+                )
+                .map_err(|e| format!("Failed to encode text {:?}: {}", text_path, e))?
             };
             std::fs::write(archive_path, encoded_data)
                 .map_err(|e| format!("Failed to write archive {:?}: {}", archive_path, e))?;
@@ -174,6 +229,7 @@ fn encode_text(
     charmap: &charmap::Charmap,
     text: &str,
     msgenc_format: bool,
+    file: Option<&Path>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut key = 0u16;
     let mut messages: Vec<String> = Vec::new();
@@ -193,13 +249,14 @@ fn encode_text(
         messages.push(line.to_string());
     }
 
-    encode_messages(charmap, key, &messages, msgenc_format)
+    encode_messages(charmap, key, &messages, msgenc_format, file)
 }
 
 fn encode_json(
     charmap: &charmap::Charmap,
     json_content: &str,
     lang: &str,
+    file: Option<&Path>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Some JSON files may start with a UTF-8 BOM (U+FEFF). Trim it so
     // serde_json doesn't fail with "expected value at line 1 column 1".
@@ -230,7 +287,7 @@ fn encode_json(
         messages.len()
     );
 
-    encode_messages(charmap, parsed.key, &messages, false)
+    encode_messages(charmap, parsed.key, &messages, false, file)
 }
 
 fn encode_messages(
@@ -238,6 +295,7 @@ fn encode_messages(
     key: u16,
     messages: &[String],
     msgenc_format: bool,
+    file: Option<&Path>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut message_index = 0usize;
 
@@ -246,12 +304,19 @@ fn encode_messages(
 
     // Collect encoded messages
     let mut encoded_messages = Vec::new();
+    let mut all_warnings = Vec::new();
 
     for message in messages {
         // Start from message index 1
         message_index += 1;
 
-        let message_codes = encode_string_to_message(charmap, message, msgenc_format);
+        let mut ctx = DiagnosticContext {
+            source: message.as_str(),
+            file,
+            span: 0..0,
+        };
+        let message_codes =
+            encode_string_to_message(charmap, message, msgenc_format, &mut all_warnings, &mut ctx);
         let mut encrypted_codes = encrypt_message(&message_codes, message_index as u16);
 
         let len = encrypted_codes.len() as u32; // length in u16 units
@@ -308,6 +373,20 @@ fn encode_messages(
         cursor.write_u16::<LittleEndian>(*code)?;
     }
 
+    for warning in all_warnings {
+        let file = warning
+            .file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string());
+        eprintln!(
+            "Warning: {}\nFile: {}\nIn message:\n{}",
+            warning.err_msg,
+            file,
+            warning.span_marker(),
+        );
+    }
+
     Ok(cursor.into_inner())
 }
 
@@ -330,12 +409,17 @@ fn encode_string_to_message(
     charmap: &charmap::Charmap,
     text: &str,
     msgenc_format: bool,
+    warnings: &mut Vec<ErrorFormat>,
+    ctx: &mut DiagnosticContext<'_>,
 ) -> Vec<u16> {
     let mut message_codes = Vec::new();
 
     let mut chars = text.chars().peekable();
+    let mut byte_pos = 0;
 
     while let Some(ch) = chars.next() {
+        let ch_start = byte_pos;
+        byte_pos += ch.len_utf8();
         let ch_str = ch.to_string();
 
         // Try single character lookup
@@ -347,11 +431,13 @@ fn encode_string_to_message(
         // Try multi-character aliases (wrapped in square brackets)
         else if ch == '[' {
             // Find the closing bracket
+            let bracket_start = ch_start;
             let mut alias = String::from("[");
             let mut found_closing = false;
 
             while let Some(&next_ch) = chars.peek() {
                 alias.push(next_ch);
+                byte_pos += next_ch.len_utf8();
                 chars.next();
                 if next_ch == ']' {
                     found_closing = true;
@@ -364,23 +450,38 @@ fn encode_string_to_message(
                 message_codes.push(*code);
                 continue;
             } else if found_closing {
-                eprintln!("Warning: unknown alias '{alias}'. Inserting null code.");
+                ctx.span = bracket_start..byte_pos;
+                warnings.push(ErrorFormat {
+                    source: ctx.source.to_string(),
+                    err_msg: format!("unknown alias '{alias}'. Inserting null code."),
+                    span: ctx.span.clone(),
+                    file: ctx.file.map(|p| p.to_path_buf()),
+                });
             } else {
-                eprintln!("Warning: unmatched '[' in text. Inserting null code.");
+                ctx.span = bracket_start..byte_pos;
+                warnings.push(ErrorFormat {
+                    source: ctx.source.to_string(),
+                    err_msg: "unmatched '[' in text. Inserting null code.".into(),
+                    span: ctx.span.clone(),
+                    file: ctx.file.map(|p| p.to_path_buf()),
+                });
             }
             message_codes.push(0);
             continue;
         }
         // Escape sequences (\xXXXX or \n, \r, etc.)
         else if ch == '\\' {
+            let escape_start = ch_start;
             if let Some(&next_ch) = chars.peek() {
                 if next_ch == 'x' {
                     // Try to read hex code \xXXXX
+                    byte_pos += next_ch.len_utf8();
                     chars.next(); // consume 'x'
                     let mut hex_str = String::new();
                     for _ in 0..4 {
                         if let Some(&hex_ch) = chars.peek() {
                             hex_str.push(hex_ch);
+                            byte_pos += hex_ch.len_utf8();
                             chars.next();
                         } else {
                             break;
@@ -392,20 +493,33 @@ fn encode_string_to_message(
                             message_codes.push(code);
                             continue;
                         } else {
-                            eprintln!(
-                                "Warning: invalid escape sequence '\\x{hex_str}'. Inserting null code."
-                            );
+                            ctx.span = escape_start..byte_pos;
+                            warnings.push(ErrorFormat {
+                                source: ctx.source.to_string(),
+                                err_msg: format!(
+                                    "invalid escape sequence '\\x{hex_str}'. Inserting null code."
+                                ),
+                                span: ctx.span.clone(),
+                                file: ctx.file.map(|p| p.to_path_buf()),
+                            });
                             message_codes.push(0);
                             continue;
                         }
                     } else {
-                        eprintln!("Warning: incomplete hex escape sequence. Inserting null code.");
+                        ctx.span = escape_start..byte_pos;
+                        warnings.push(ErrorFormat {
+                            source: ctx.source.to_string(),
+                            err_msg: "incomplete hex escape sequence. Inserting null code.".into(),
+                            span: ctx.span.clone(),
+                            file: ctx.file.map(|p| p.to_path_buf()),
+                        });
                         message_codes.push(0);
                         continue;
                     }
                 } else {
                     // Try two-character escape sequence like \n, \r
                     let escape_seq = format!("\\{}", next_ch);
+                    byte_pos += next_ch.len_utf8();
                     chars.next(); // consume next character
 
                     if charmap.encode_map.contains_key(&escape_seq) {
@@ -413,17 +527,28 @@ fn encode_string_to_message(
                         message_codes.push(*code);
                         continue;
                     } else {
-                        eprintln!(
-                            "Warning: unknown escape sequence '{escape_seq}'. Inserting null code."
-                        );
+                        ctx.span = escape_start..byte_pos;
+                        warnings.push(ErrorFormat {
+                            source: ctx.source.to_string(),
+                            err_msg: format!(
+                                "unknown escape sequence '{escape_seq}'. Inserting null code."
+                            ),
+                            span: ctx.span.clone(),
+                            file: ctx.file.map(|p| p.to_path_buf()),
+                        });
                         message_codes.push(0);
                         continue;
                     }
                 }
             } else {
-                eprintln!(
-                    "Warning: incomplete escape sequence at end of text. Inserting null code."
-                );
+                ctx.span = escape_start..byte_pos;
+                warnings.push(ErrorFormat {
+                    source: ctx.source.to_string(),
+                    err_msg: "incomplete escape sequence at end of text. Inserting null code."
+                        .into(),
+                    span: ctx.span.clone(),
+                    file: ctx.file.map(|p| p.to_path_buf()),
+                });
                 message_codes.push(0);
                 continue;
             }
@@ -431,34 +556,52 @@ fn encode_string_to_message(
         // Command style sequences
         else if ch == '{' {
             // Find the closing brace
+            let brace_start = ch_start;
             let mut command_str = String::new();
             let mut found_closing = false;
 
             while let Some(&next_ch) = chars.peek() {
                 if next_ch == '}' {
+                    byte_pos += next_ch.len_utf8();
                     chars.next(); // consume '}'
                     found_closing = true;
                     break;
                 }
                 command_str.push(next_ch);
+                byte_pos += next_ch.len_utf8();
                 chars.next();
             }
 
+            let command_span = brace_start..byte_pos;
+
             if !found_closing {
-                eprintln!("Warning: unmatched '{{' in text. Inserting null code.");
+                ctx.span = command_span;
+                warnings.push(ErrorFormat {
+                    source: ctx.source.to_string(),
+                    err_msg: "unmatched '{' in text. Inserting null code.".into(),
+                    span: ctx.span.clone(),
+                    file: ctx.file.map(|p| p.to_path_buf()),
+                });
                 message_codes.push(0);
                 continue;
             }
 
             if command_str.is_empty() {
-                eprintln!("Warning: empty command '{{}}'. Inserting null code.");
+                ctx.span = command_span;
+                warnings.push(ErrorFormat {
+                    source: ctx.source.to_string(),
+                    err_msg: "empty command '{}'. Inserting null code.".into(),
+                    span: ctx.span.clone(),
+                    file: ctx.file.map(|p| p.to_path_buf()),
+                });
                 message_codes.push(0);
                 continue;
             }
             // Special handling for TRAINER_NAME command
             if command_str.starts_with("TRAINER_NAME:") {
                 let name_str = &command_str["TRAINER_NAME:".len()..];
-                let name_codes = encode_trainer_name(charmap, name_str);
+                ctx.span = command_span;
+                let name_codes = encode_trainer_name(charmap, name_str, ctx, warnings);
                 message_codes.extend(name_codes);
                 continue;
             }
@@ -466,22 +609,31 @@ fn encode_string_to_message(
             else if msgenc_format && command_str.starts_with("TRNAME") {
                 // Treat the rest of the message as trainer name
                 let name_str: String = chars.collect();
-                let name_codes = encode_trainer_name(charmap, &name_str);
+                ctx.span = command_span;
+                let name_codes = encode_trainer_name(charmap, &name_str, ctx, warnings);
                 message_codes.extend(name_codes);
                 break; // end of message
             } else if msgenc_format {
-                let command_codes = encode_command_msgenc(charmap, &command_str);
+                ctx.span = command_span;
+                let command_codes = encode_command_msgenc(charmap, &command_str, ctx, warnings);
                 message_codes.extend(command_codes);
                 continue;
             } else {
-                let command_codes = encode_command(charmap, &command_str);
+                ctx.span = command_span;
+                let command_codes = encode_command(charmap, &command_str, ctx, warnings);
                 message_codes.extend(command_codes);
                 continue;
             }
         }
         // Unknown character
         else {
-            eprintln!("Warning: unknown character '{}'. Inserting null code.", ch);
+            ctx.span = ch_start..byte_pos;
+            warnings.push(ErrorFormat {
+                source: ctx.source.to_string(),
+                err_msg: format!("unknown character '{ch}'. Inserting null code."),
+                span: ctx.span.clone(),
+                file: ctx.file.map(|p| p.to_path_buf()),
+            });
             message_codes.push(0);
             continue;
         }
@@ -493,7 +645,12 @@ fn encode_string_to_message(
     message_codes
 }
 
-fn encode_command(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
+fn encode_command(
+    charmap: &charmap::Charmap,
+    command_str: &str,
+    ctx: &mut DiagnosticContext<'_>,
+    warnings: &mut Vec<ErrorFormat>,
+) -> Vec<u16> {
     let mut command_codes = Vec::new();
 
     // Split command and arguments
@@ -501,10 +658,12 @@ fn encode_command(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
 
     // Ensure there is at least a command name and the special byte which is OR'ed with it
     if parts.len() < 2 {
-        eprintln!(
-            "Warning: invalid command format '{}'. Inserting null code.",
-            command_str
-        );
+        warnings.push(ErrorFormat {
+            source: ctx.source.to_string(),
+            err_msg: format!("invalid command format '{command_str}'. Inserting null code."),
+            span: ctx.span.clone(),
+            file: ctx.file.map(|p| p.to_path_buf()),
+        });
         command_codes.push(0);
         return command_codes;
     }
@@ -520,10 +679,12 @@ fn encode_command(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
         Some((code, _)) => *code,
         None => {
             let code = parse_hex_or_decimal(command_name) as u16;
-            eprintln!(
-                "Warning: unknown command name '{}'. Using code 0x{:04X}.",
-                command_name, code
-            );
+            warnings.push(ErrorFormat {
+                source: ctx.source.to_string(),
+                err_msg: format!("unknown command name '{command_name}'. Using code 0x{code:04X}."),
+                span: ctx.span.clone(),
+                file: ctx.file.map(|p| p.to_path_buf()),
+            });
             code
         }
     };
@@ -551,7 +712,12 @@ fn encode_command(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
     command_codes
 }
 
-fn encode_command_msgenc(charmap: &charmap::Charmap, command_str: &str) -> Vec<u16> {
+fn encode_command_msgenc(
+    charmap: &charmap::Charmap,
+    command_str: &str,
+    ctx: &mut DiagnosticContext<'_>,
+    warnings: &mut Vec<ErrorFormat>,
+) -> Vec<u16> {
     let mut command_codes = Vec::new();
 
     // Opinion: I don't understand why msgenc uses this different format for commands.
@@ -574,10 +740,12 @@ fn encode_command_msgenc(charmap: &charmap::Charmap, command_str: &str) -> Vec<u
         Some((code, _)) => *code,
         None => {
             let code = parse_hex_or_decimal(command_name) as u16;
-            eprintln!(
-                "Warning: unknown command name '{}'. Using code 0x{:04X}.",
-                command_name, code
-            );
+            warnings.push(ErrorFormat {
+                source: ctx.source.to_string(),
+                err_msg: format!("unknown command name '{command_name}'. Using code 0x{code:04X}."),
+                span: ctx.span.clone(),
+                file: ctx.file.map(|p| p.to_path_buf()),
+            });
             code
         }
     };
@@ -616,7 +784,12 @@ fn encode_command_msgenc(charmap: &charmap::Charmap, command_str: &str) -> Vec<u
     command_codes
 }
 
-fn encode_trainer_name(charmap: &charmap::Charmap, name_str: &str) -> Vec<u16> {
+fn encode_trainer_name(
+    charmap: &charmap::Charmap,
+    name_str: &str,
+    ctx: &mut DiagnosticContext<'_>,
+    warnings: &mut Vec<ErrorFormat>,
+) -> Vec<u16> {
     let mut name_codes = Vec::new();
 
     name_codes.push(0xF100); // Trainer name command code
@@ -629,10 +802,12 @@ fn encode_trainer_name(charmap: &charmap::Charmap, name_str: &str) -> Vec<u16> {
         let code = if charmap.encode_map.contains_key(&ch.to_string()) {
             *charmap.encode_map.get(&ch.to_string()).unwrap()
         } else {
-            eprintln!(
-                "Warning: unknown character '{}' in trainer name. Using null code.",
-                ch
-            );
+            warnings.push(ErrorFormat {
+                source: ctx.source.to_string(),
+                err_msg: format!("unknown character '{ch}' in trainer name. Using null code."),
+                span: ctx.span.clone(),
+                file: ctx.file.map(|p| p.to_path_buf()),
+            });
             0
         };
 
@@ -665,3 +840,4 @@ fn parse_hex_or_decimal(number_str: &str) -> u32 {
     };
     number
 }
+
